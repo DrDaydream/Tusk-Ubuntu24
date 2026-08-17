@@ -1,7 +1,9 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 import subprocess
 from math import ceil
-from os.path import basename, splitext
+from os import environ
+from os.path import basename, isdir, splitext
+from tempfile import mkdtemp
 from time import sleep
 
 from benchmark.commands import CommandMaker
@@ -25,19 +27,31 @@ class LocalBench:
             self.node_parameters = NodeParameters(node_parameters_dict)
         except ConfigError as e:
             raise BenchError("Invalid nodes or bench parameters", e)
+        self.tmux_dir = mkdtemp(prefix='tusk-benchmark-tmux-')
 
     def __getattr__(self, attr):
         return getattr(self.bench_parameters, attr)
 
     def _background_run(self, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f"{command} 2> {log_file}"
-        subprocess.run(["tmux", "new", "-d", "-s", name, cmd], check=True)
+        # Benchmark parsing relies on INFO markers. Do not let a caller's
+        # global RUST_LOG=warn/off silently produce empty client logs.
+        cmd = f"RUST_LOG=info {command} 2> {log_file}"
+        subprocess.run(
+            ["tmux", "new", "-d", "-s", name, cmd],
+            check=True,
+            env=self._tmux_env(),
+        )
+
+    def _tmux_env(self):
+        env = environ.copy()
+        env['TMUX_TMPDIR'] = self.tmux_dir
+        return env
 
     def _kill_nodes(self):
         try:
             cmd = CommandMaker.kill().split()
-            subprocess.run(cmd, stderr=subprocess.DEVNULL)
+            subprocess.run(cmd, stderr=subprocess.DEVNULL, env=self._tmux_env())
         except subprocess.SubprocessError as e:
             raise BenchError("Failed to kill testbed", e)
 
@@ -59,7 +73,24 @@ class LocalBench:
 
             # Recompile the latest code.
             cmd = CommandMaker.compile().split()
-            subprocess.run(cmd, check=True, cwd=PathMaker.node_crate_path())
+            build_env = environ.copy()
+            for llvm in (18, 17, 16, 15, 14):
+                libclang = f'/usr/lib/llvm-{llvm}/lib'
+                if isdir(libclang):
+                    build_env.setdefault('LIBCLANG_PATH', libclang)
+                    build_env.setdefault('CLANG_PATH', f'/usr/bin/clang-{llvm}')
+                    build_env.setdefault('CC', f'/usr/bin/clang-{llvm}')
+                    build_env.setdefault('CXX', f'/usr/bin/clang++-{llvm}')
+                    break
+            cxxflags = build_env.get('CXXFLAGS', '')
+            if '-include cstdint' not in cxxflags:
+                build_env['CXXFLAGS'] = f'{cxxflags} -include cstdint'.strip()
+            subprocess.run(
+                cmd,
+                check=True,
+                cwd=PathMaker.node_crate_path(),
+                env=build_env,
+            )
 
             # Create alias for the client and nodes binary.
             cmd = CommandMaker.alias_binaries(PathMaker.binary_path())

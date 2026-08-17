@@ -1,4 +1,7 @@
 *.json
+*.pem
+deploy/hosts-*.txt
+!deploy/hosts-*.txt.example
 .DS_Store
 .storage_*
 .*storage*
