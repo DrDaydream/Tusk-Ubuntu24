@@ -1,5 +1,7 @@
 # Tusk-Ubuntu24 AWS 10/20/50 节点部署
 
+AWS benchmark 启动 Primary 时会自动设置 `TUSK_ONE_THIRD_DIRECT=1`：每三个偶数轮 leader 中只有一个能直接触发提交，其他 leader 仍可被后续 leader 通过递归历史 fallback 提交。`faults > 0` 仍表示最后 `f` 个节点不启动。结果会附加 direct-commit 与 fallback leader 比例。
+
 ## AWS 网络
 
 1. 创建安全组 `tusk-sg`。TCP 22 允许你的公网 IP；TCP 22 及 `3000-3004` 仅允许 `tusk-sg` 自身。
