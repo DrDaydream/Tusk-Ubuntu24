@@ -1,71 +1,155 @@
-> **Note to readers:** MystenLabs is making this codebase production-ready [here](https://github.com/MystenLabs/sui/tree/main/narwhal).
+# Tusk-Ubuntu24
 
-# Narwhal and Tusk
+[![Rust](https://github.com/DrDaydream/Tusk-Ubuntu24/actions/workflows/rust.yml/badge.svg)](https://github.com/DrDaydream/Tusk-Ubuntu24/actions/workflows/rust.yml)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04-E95420?style=flat-square&logo=ubuntu)](https://ubuntu.com/)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=flat-square)](LICENSE)
 
-[![build status](https://img.shields.io/github/actions/workflow/status/asonnino/narwhal/rust.yml?branch=master&logo=github&style=flat-square)](https://github.com/asonnino/narwhal/actions)
-[![rustc](https://img.shields.io/badge/rustc-1.51+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![python](https://img.shields.io/badge/python-3.9-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-390/)
-[![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
+This repository provides an Ubuntu 24.04-compatible implementation of [Narwhal and Tusk](https://arxiv.org/pdf/2105.11827.pdf). This version also includes deterministic dynamic-adversary scheduling, controlled direct-commit selection, additional leader/non-leader latency statistics, and local/AWS benchmark tooling.
 
-This repo provides an implementation of [Narwhal and Tusk](https://arxiv.org/pdf/2105.11827.pdf). The codebase has been designed to be small, efficient, and easy to benchmark and modify. It has not been designed to run in production but uses real cryptography ([dalek](https://doc.dalek.rs/ed25519_dalek)), networking ([tokio](https://docs.rs/tokio)), and storage ([rocksdb](https://docs.rs/rocksdb)).
+The code is designed for research, benchmarking, and protocol modification rather than production use. It uses real cryptography ([dalek](https://doc.dalek.rs/ed25519_dalek)), asynchronous networking ([Tokio](https://docs.rs/tokio)), and persistent storage ([RocksDB](https://rocksdb.org/)).
 
 ## Quick Start
 
-The core protocols are written in Rust, but all benchmarking scripts are written in Python and run with [Fabric](http://www.fabfile.org/).
-To deploy and benchmark a testbed of 4 nodes on your local machine, clone the repo and install the python dependencies:
+The core protocol is written in Rust. Python scripts use [Fabric](https://www.fabfile.org/) to compile, run, and parse benchmarks.
 
-```
-$ git clone https://github.com/asonnino/narwhal.git
-$ cd narwhal/benchmark
-$ pip install -r requirements.txt
-```
+Install the Ubuntu 24.04 dependencies directly into the current user environment:
 
-You also need to install Clang (required by rocksdb) and [tmux](https://linuxize.com/post/getting-started-with-tmux/#installing-tmux) (which runs all nodes and clients in the background). Finally, run a local benchmark using fabric:
+~~~bash
+git clone https://github.com/DrDaydream/Tusk-Ubuntu24.git
+cd Tusk-Ubuntu24
 
-```
-$ fab local
-```
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake clang-14 libclang-14-dev curl git tmux \
+  python3 python3-pip
 
-This command may take a long time the first time you run it (compiling rust code in `release` mode may be slow) and you can customize a number of benchmark parameters in `fabfile.py`. When the benchmark terminates, it displays a summary of the execution similarly to the one below.
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
 
-```
+python3 -m pip install --user --break-system-packages \
+  -r benchmark/requirements.txt
+export PATH="$HOME/.local/bin:$PATH"
+~~~
+
+The local benchmark detects installed LLVM versions automatically. These explicit variables can be used if RocksDB bindgen fails:
+
+~~~bash
+export LIBCLANG_PATH=/usr/lib/llvm-14/lib
+export CLANG_PATH=/usr/bin/clang-14
+export CC=/usr/bin/clang-14
+export CXX=/usr/bin/clang++-14
+export CXXFLAGS='-include cstdint'
+~~~
+
+Configure the experiment in `benchmark/fabfile.py`:
+
+~~~python
+bench_params = {
+    'faults': 1,
+    'nodes': 4,
+    'workers': 1,
+    'rate': 50_000,
+    'tx_size': 512,
+    'duration': 20,
+}
+~~~
+
+The `faults` field enables the dynamic adversary while all processes stay online. Use `nodes >= 3 * faults + 1`.
+
+Run:
+
+~~~bash
+cd benchmark
+fab local
+~~~
+
+The first run builds the workspace in release mode with the `benchmark` feature and can take several minutes.
+
+### Local adversary options
+
+Set `'faults': 0` in `benchmark/fabfile.py` for the no-adversary baseline. With `faults > 0`:
+
+~~~bash
+# Default: pause client input during deterministically selected silent slots.
+TUSK_ADVERSARY_SEED=42 \
+TUSK_CLIENT_DURING_SILENCE=pause \
+fab local
+
+# Keep client and batch input while the selected Primary remains silent.
+TUSK_ADVERSARY_SEED=42 \
+TUSK_CLIENT_DURING_SILENCE=send \
+fab local
+
+# Override the wall-clock schedule slot.
+TUSK_ADVERSARY_SEED=42 \
+TUSK_CLIENT_DURING_SILENCE=pause \
+TUSK_CLIENT_SILENCE_SLOT_MS=200 \
+fab local
+~~~
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TUSK_ADVERSARY_SEED` | `0` | Deterministic per-round schedule seed |
+| `TUSK_CLIENT_DURING_SILENCE` | `pause` | Pause or preserve client input |
+| `TUSK_CLIENT_SILENCE_SLOT_MS` | `max_header_delay` | Client schedule slot in milliseconds |
+
+Every round selects exactly f adversarial authorities. A silent Primary suppresses its Header while still receiving messages. Client silence is a pre-generated one-way wall-clock schedule and does not query live protocol rounds.
+
+Leader scheduling uses windows of `3f+1` leader rounds. Exactly f leader slots are silent, and up to `f+2` available slots are deterministically selected for direct commit. When enough leaders are available, the target direct-commit ratio over all leader slots is `(f+2)/(3f+1)`. Other committed leaders are reported as fallback leaders.
+
+### Example output
+
+This is an actual result parsed from the repository's current 4-node, 1-fault, 20-second local benchmark logs:
+
+~~~text
 -----------------------------------------
  SUMMARY:
 -----------------------------------------
  + CONFIG:
- Faults: 0 node(s)
+ Faults: 1 node(s)
  Committee size: 4 node(s)
  Worker(s) per node: 1 worker(s)
  Collocate primary and workers: True
  Input rate: 50,000 tx/s
  Transaction size: 512 B
- Execution time: 19 s
+ Execution time: 20 s
 
  Header size: 1,000 B
- Max header delay: 100 ms
+ Max header delay: 200 ms
  GC depth: 50 round(s)
  Sync retry delay: 10,000 ms
  Sync retry nodes: 3 node(s)
  batch size: 500,000 B
- Max batch delay: 100 ms
+ Max batch delay: 200 ms
 
  + RESULTS:
- Consensus TPS: 46,478 tx/s
- Consensus BPS: 23,796,531 B/s
- Consensus latency: 464 ms
+ Consensus TPS: 36,247 tx/s
+ Consensus BPS: 18,558,490 B/s
+ Consensus latency: 829 ms
 
- End-to-end TPS: 46,149 tx/s
- End-to-end BPS: 23,628,541 B/s
- End-to-end latency: 557 ms
+ End-to-end TPS: 35,999 tx/s
+ End-to-end BPS: 18,431,588 B/s
+ End-to-end latency: 1,036 ms
+ Leader commit latency: 510 ms
+ Non-leader commit latency: 877 ms
+ All committed headers latency: 831 ms
+ Leader commit interval: 512 ms
+ Non-leader rule-order latency: 877 ms
+ Direct-commit leader ratio: 100.00%
+ Fallback leader ratio: 0.00%
 -----------------------------------------
-```
+~~~
+
+Results depend on hardware and load. `Consensus latency` measures header creation to consensus commit; `End-to-end latency` starts when the benchmark client submits a sampled transaction. Short executions may not converge to the configured long-run direct/fallback ratio.
 
 ## Next Steps
 
-The next step is to read the paper [Narwhal and Tusk: A DAG-based Mempool and Efficient BFT Consensus](https://arxiv.org/pdf/2105.11827.pdf). It is then recommended to have a look at the README files of the [worker](https://github.com/asonnino/narwhal/tree/master/worker) and [primary](https://github.com/asonnino/narwhal/tree/master/primary) crates. An additional resource to better understand the Tusk consensus protocol is the paper [All You Need is DAG](https://arxiv.org/abs/2102.08325) as it describes a similar protocol.
-
-The README file of the [benchmark folder](https://github.com/asonnino/narwhal/tree/master/benchmark) explains how to benchmark the codebase and read benchmarks' results. It also provides a step-by-step tutorial to run benchmarks on [Amazon Web Services (AWS)](https://aws.amazon.com) accross multiple data centers (WAN).
+- Read [Narwhal and Tusk: A DAG-based Mempool and Efficient BFT Consensus](https://arxiv.org/pdf/2105.11827.pdf).
+- Read [All You Need is DAG](https://arxiv.org/abs/2102.08325) for related asynchronous DAG consensus.
+- See [benchmark/README.md](benchmark/README.md) for complete benchmark parameters and result semantics.
+- See [README-AWS.md](README-AWS.md) for complete AWS 10/20/50-node, cross-Region, and adversary deployment instructions.
+- Inspect the [primary](primary), [worker](worker), and [consensus](consensus) crates.
 
 ## License
 
-This software is licensed as [Apache 2.0](LICENSE).
+This software is licensed under [Apache License 2.0](LICENSE).
