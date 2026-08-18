@@ -44,9 +44,13 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, commits, header_proposals, header_commits, rule_orders, leader_paths, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        self.header_proposals = self._merge_results([x.items() for x in header_proposals])
+        self.header_commits = self._merge_tagged_results(header_commits)
+        self.rule_orders = self._merge_results([x.items() for x in rule_orders])
+        self.leader_paths = self._merge_leader_paths(leader_paths)
 
         # Parse the workers logs.
         try:
@@ -75,6 +79,21 @@ class LogParser:
             for k, v in x:
                 if not k in merged or merged[k] > v:
                     merged[k] = v
+        return merged
+
+    def _merge_tagged_results(self, results):
+        merged = {}
+        for result in results:
+            for digest, value in result.items():
+                if digest not in merged or value[0] < merged[digest][0]:
+                    merged[digest] = value
+        return merged
+
+    def _merge_leader_paths(self, inputs):
+        merged = {}
+        for values in inputs:
+            for leader, path in values.items():
+                merged.setdefault(leader, path)
         return merged
 
     def _parse_clients(self, log):
@@ -106,6 +125,15 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        tmp = findall(r'\[(.*Z) .* Header created round \d+ digest (\S+)', log)
+        header_proposals = self._merge_results([[(d, self._to_posix(t)) for t, d in tmp]])
+        tmp = findall(r'\[(.*Z) .* Header committed round \d+ digest (\S+) leader (true|false)', log)
+        header_commits = {d: (self._to_posix(t), role == 'true') for t, d, role in tmp}
+        tmp = findall(r'\[(.*Z) .* Header rule-ordered round \d+ digest (\S+)', log)
+        rule_orders = self._merge_results([[(d, self._to_posix(t)) for t, d in tmp]])
+        tmp = findall(r'Leader path stats leader (\S+) path (direct|fallback)', log)
+        leader_paths = dict(tmp)
+
         configs = {
             'header_size': int(
                 search(r'Header size .* (\d+)', log).group(1)
@@ -132,7 +160,7 @@ class LogParser:
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
         
-        return proposals, commits, configs, ip
+        return proposals, commits, header_proposals, header_commits, rule_orders, leader_paths, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|Error)', log) is not None:
@@ -187,6 +215,28 @@ class LogParser:
                     latency += [end-start]
         return mean(latency) if latency else 0
 
+    def _header_latency_stats(self):
+        leader, non_leader, all_headers = [], [], []
+        for digest, (committed, is_leader) in self.header_commits.items():
+            if digest not in self.header_proposals:
+                continue
+            latency = committed - self.header_proposals[digest]
+            all_headers.append(latency)
+            (leader if is_leader else non_leader).append(latency)
+        ordered = [ordered - self.header_proposals[d] for d, ordered in self.rule_orders.items() if d in self.header_proposals]
+        leader_times = sorted(t for t, is_leader in self.header_commits.values() if is_leader)
+        intervals = [b - a for a, b in zip(leader_times, leader_times[1:])]
+        return tuple(mean(x) if x else 0 for x in (leader, non_leader, all_headers, intervals, ordered))
+
+    def _leader_path_ratios(self):
+        total = len(self.leader_paths)
+        if not total:
+            return 0, 0
+        return tuple(
+            100 * sum(value == path for value in self.leader_paths.values()) / total
+            for path in ('direct', 'fallback')
+        )
+
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -200,6 +250,8 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
+        leader_latency, non_leader_latency, all_header_latency, leader_interval, rule_order_latency = (value * 1_000 for value in self._header_latency_stats())
+        direct_ratio, fallback_ratio = self._leader_path_ratios()
 
         return (
             '\n'
@@ -231,6 +283,13 @@ class LogParser:
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            f' Leader commit latency: {round(leader_latency):,} ms\n'
+            f' Non-leader commit latency: {round(non_leader_latency):,} ms\n'
+            f' All committed headers latency: {round(all_header_latency):,} ms\n'
+            f' Leader commit interval: {round(leader_interval):,} ms\n'
+            f' Non-leader rule-order latency: {round(rule_order_latency):,} ms\n'
+            f' Direct-commit leader ratio: {direct_ratio:.2f}%\n'
+            f' Fallback leader ratio: {fallback_ratio:.2f}%\n'
             '-----------------------------------------\n'
         )
 

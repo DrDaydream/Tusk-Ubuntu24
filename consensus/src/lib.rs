@@ -81,6 +81,16 @@ pub struct Consensus {
 }
 
 impl Consensus {
+    /// Benchmark adversarial scheduler: exactly one out of every three even
+    /// leader rounds may directly trigger a commit. All nodes derive the same
+    /// choice from the round, so scheduling cannot fork consensus state.
+    fn direct_commit_selected(round: Round) -> bool {
+        if std::env::var("TUSK_ONE_THIRD_DIRECT").ok().as_deref() != Some("1") {
+            return true;
+        }
+        (round / 2) % 3 == 0
+    }
+
     pub fn spawn(
         committee: Committee,
         gc_depth: Round,
@@ -133,6 +143,13 @@ impl Consensus {
             if leader_round <= state.last_committed_round {
                 continue;
             }
+            if !Self::direct_commit_selected(leader_round) {
+                debug!(
+                    "Leader round {} is not selected for direct commit",
+                    leader_round
+                );
+                continue;
+            }
             let (leader_digest, leader) = match self.leader(leader_round, &state.dag) {
                 Some(x) => x,
                 None => continue,
@@ -159,14 +176,38 @@ impl Consensus {
             // Get an ordered list of past leaders that are linked to the current leader.
             debug!("Leader {:?} has enough support", leader);
             let mut sequence = Vec::new();
-            for leader in self.order_leaders(leader, &state).iter().rev() {
+            let trigger_digest = leader.digest();
+            let leaders_to_commit = self.order_leaders(leader, &state);
+            for leader in leaders_to_commit.iter().rev() {
+                #[cfg(feature = "benchmark")]
+                info!(
+                    "Leader path stats leader {:?} path {}",
+                    leader.header.digest(),
+                    if leader.digest() == trigger_digest {
+                        "direct"
+                    } else {
+                        "fallback"
+                    }
+                );
                 // Starting from the oldest leader, flatten the sub-dag referenced by the leader.
                 for x in self.order_dag(leader, &state) {
+                    let is_leader = x.round() % 2 == 0
+                        && self
+                            .leader(x.round(), &state.dag)
+                            .map_or(false, |(digest, _)| digest == &x.digest());
+                    #[cfg(feature = "benchmark")]
+                    if !is_leader {
+                        info!(
+                            "Header rule-ordered round {} digest {:?}",
+                            x.round(),
+                            x.header.digest()
+                        );
+                    }
                     // Update and clean up internal state.
                     state.update(&x, self.gc_depth);
 
                     // Add the certificate to the sequence.
-                    sequence.push(x);
+                    sequence.push((x, is_leader));
                 }
             }
 
@@ -178,9 +219,17 @@ impl Consensus {
             }
 
             // Output the sequence in the right order.
-            for certificate in sequence {
+            for (certificate, is_leader) in sequence {
                 #[cfg(not(feature = "benchmark"))]
                 info!("Committed {}", certificate.header);
+
+                #[cfg(feature = "benchmark")]
+                info!(
+                    "Header committed round {} digest {:?} leader {}",
+                    certificate.round(),
+                    certificate.header.digest(),
+                    is_leader
+                );
 
                 #[cfg(feature = "benchmark")]
                 for digest in certificate.header.payload.keys() {
