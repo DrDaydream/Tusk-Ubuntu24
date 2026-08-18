@@ -9,7 +9,7 @@ case "$NODES" in 10|20|50) ;; *) echo "Usage: $0 <10|20|50> [seconds] [total-tps
 [[ "$FAULTS" =~ ^[0-9]+$ ]] && (( FAULTS < NODES )) || { echo "TUSK_FAULTS must be smaller than the node count" >&2; exit 2; }
 [[ "$ADVERSARY_SEED" =~ ^[0-9]+$ ]] || { echo "TUSK_ADVERSARY_SEED must be a non-negative integer" >&2; exit 2; }
 case "$CLIENT_DURING_SILENCE" in send|pause) ;; *) echo "TUSK_CLIENT_DURING_SILENCE must be send or pause" >&2; exit 2;; esac
-REMOTE_USER="${REMOTE_USER:-ubuntu}"; REMOTE_DIR="${REMOTE_DIR:-/home/ubuntu/Tusk-Ubuntu24}"
+REMOTE_USER="${REMOTE_USER:-root}"; REMOTE_DIR="${REMOTE_DIR:-/root/Tusk-Ubuntu24}"
 HOSTS_FILE="${HOSTS_FILE:-deploy/hosts-${NODES}.txt}"; SSH_KEY="${SSH_KEY:-$HOME/.ssh/tusk-aws.pem}"
 TX_SIZE="${TX_SIZE:-512}"; READY_TIMEOUT="${READY_TIMEOUT:-240}"
 SSH_OPTS=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new)
