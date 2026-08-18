@@ -81,14 +81,22 @@ pub struct Consensus {
 }
 
 impl Consensus {
-    /// Benchmark adversarial scheduler: exactly one out of every three even
-    /// leader rounds may directly trigger a commit. All nodes derive the same
-    /// choice from the round, so scheduling cannot fork consensus state.
-    fn direct_commit_selected(round: Round) -> bool {
-        if std::env::var("TUSK_ONE_THIRD_DIRECT").ok().as_deref() != Some("1") {
-            return true;
-        }
-        (round / 2) % 3 == 0
+    fn direct_commit_selected(&self, round: Round) -> bool {
+        let faults = std::env::var("TUSK_FAULTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let seed = std::env::var("TUSK_ADVERSARY_SEED")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let authorities = self
+            .committee
+            .authorities
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        primary::adversary::direct_commit_selected(&authorities, round, faults, seed)
     }
 
     pub fn spawn(
@@ -143,7 +151,7 @@ impl Consensus {
             if leader_round <= state.last_committed_round {
                 continue;
             }
-            if !Self::direct_commit_selected(leader_round) {
+            if !self.direct_commit_selected(leader_round) {
                 debug!(
                     "Leader round {} is not selected for direct commit",
                     leader_round

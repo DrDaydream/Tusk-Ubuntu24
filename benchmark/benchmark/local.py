@@ -7,6 +7,7 @@ from tempfile import mkdtemp
 from time import sleep
 
 from benchmark.commands import CommandMaker
+from benchmark.adversary_schedule import build_client_schedules, client_silence_slot_ms
 from benchmark.config import (
     Key,
     LocalCommittee,
@@ -111,8 +112,14 @@ class LocalBench:
             self.node_parameters.print(PathMaker.parameters_file())
 
             # Run the clients (they will wait for the nodes to be ready).
-            workers_addresses = committee.workers_addresses(self.faults)
+            workers_addresses = committee.workers_addresses(0)
             rate_share = ceil(rate / committee.workers())
+            silence_slot_ms = client_silence_slot_ms(
+                self.node_parameters.json['max_header_delay']
+            )
+            silence_schedules = build_client_schedules(
+                names, self.faults, self.duration, silence_slot_ms
+            )
             for i, addresses in enumerate(workers_addresses):
                 for id, address in addresses:
                     cmd = CommandMaker.run_client(
@@ -120,18 +127,21 @@ class LocalBench:
                         self.tx_size,
                         rate_share,
                         [x for y in workers_addresses for _, x in y],
+                        silence_schedules[names[i]],
+                        silence_slot_ms,
                     )
                     log_file = PathMaker.client_log_file(i, id)
                     self._background_run(cmd, log_file)
 
             # Run the primaries (except the faulty ones).
-            for i, address in enumerate(committee.primary_addresses(self.faults)):
+            for i, address in enumerate(committee.primary_addresses(0)):
                 cmd = CommandMaker.run_primary(
                     PathMaker.key_file(i),
                     PathMaker.committee_file(),
                     PathMaker.db_path(i),
                     PathMaker.parameters_file(),
                     debug=debug,
+                    faults=self.faults,
                 )
                 log_file = PathMaker.primary_log_file(i)
                 self._background_run(cmd, log_file)

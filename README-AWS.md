@@ -1,6 +1,6 @@
 # Tusk-Ubuntu24 AWS 10/20/50 节点部署
 
-AWS benchmark 启动 Primary 时会自动设置 `TUSK_ONE_THIRD_DIRECT=1`：每三个偶数轮 leader 中只有一个能直接触发提交，其他 leader 仍可被后续 leader 通过递归历史 fallback 提交。`faults > 0` 仍表示最后 `f` 个节点不启动。结果会附加 direct-commit 与 fallback leader 比例。
+`faults > 0` 时所有节点仍保持在线，每轮按 `TUSK_ADVERSARY_SEED`、轮次和节点身份确定性随机选出 `f` 个静默敌手。静默 Primary 不生成 Header，但仍接收消息。每 `3f+1` 个 leader 轮形成一个直接提交窗口：先排除静默 leader，再通过哈希随机选出最多 `f+2` 个允许直接提交，因此可用 leader 足够时比例精确为 `(f+2)/(3f+1)`。benchmark 启动前为每个 Client 预生成静默时序表；`TUSK_CLIENT_DURING_SILENCE=pause` 为默认值，静默槽内不发交易且 Worker 暂停 batch，`send` 可用于保留输入流量的对照测试。结果会附加 direct-commit 与 fallback leader 比例。
 
 ## AWS 网络
 
@@ -67,9 +67,9 @@ for ((i=0;i<NODES;i++)); do ssh -i ~/.ssh/tusk-aws.pem ubuntu@${IPS[$i]} 'mkdir 
 
 ```bash
 chmod +x run-multi-servers.sh
-./run-multi-servers.sh 10 20 10000
-./run-multi-servers.sh 20 60 10000
-./run-multi-servers.sh 50 60 10000
+TUSK_FAULTS=3 TUSK_ADVERSARY_SEED=42 TUSK_CLIENT_DURING_SILENCE=pause ./run-multi-servers.sh 10 20 10000
+TUSK_FAULTS=6 TUSK_ADVERSARY_SEED=42 TUSK_CLIENT_DURING_SILENCE=pause ./run-multi-servers.sh 20 60 10000
+TUSK_FAULTS=16 TUSK_ADVERSARY_SEED=42 TUSK_CLIENT_DURING_SILENCE=pause ./run-multi-servers.sh 50 60 10000
 ```
 
 日志与结果位于 `benchmark/logs`。`NoneType` 日志解析错误通常表示 client 没有 `Start sending transactions`；检查所有 Worker 的 3003 端口。测试后及时 Stop/Terminate EC2。

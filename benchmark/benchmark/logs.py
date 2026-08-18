@@ -22,7 +22,7 @@ class LogParser:
 
         self.faults = faults
         if isinstance(faults, int):
-            self.committee_size = len(primaries) + int(faults)
+            self.committee_size = len(primaries)
             self.workers =  len(workers) // len(primaries)
         else:
             self.committee_size = '?'

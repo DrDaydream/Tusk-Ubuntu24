@@ -13,6 +13,7 @@ import subprocess
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker, progress_bar
 from benchmark.commands import CommandMaker
+from benchmark.adversary_schedule import build_client_schedules, client_silence_slot_ms
 from benchmark.logs import LogParser, ParseError
 from benchmark.instance import InstanceManager
 
@@ -198,7 +199,6 @@ class Bench:
         node_parameters.print(PathMaker.parameters_file())
 
         # Cleanup all nodes and upload configuration files.
-        names = names[:len(names)-bench_parameters.faults]
         progress = progress_bar(names, prefix='Uploading config files:')
         for i, name in enumerate(progress):
             for ip in committee.ips(name):
@@ -210,19 +210,24 @@ class Bench:
 
         return committee
 
-    def _run_single(self, rate, committee, bench_parameters, debug=False):
+    def _run_single(self, rate, committee, bench_parameters, node_parameters, debug=False):
         faults = bench_parameters.faults
 
         # Kill any potentially unfinished run and delete logs.
         hosts = committee.ips()
         self.kill(hosts=hosts, delete_logs=True)
 
-        # Run the clients (they will wait for the nodes to be ready).
-        # Filter all faulty nodes from the client addresses (or they will wait
-        # for the faulty nodes to be online).
+        # Run every client; its pre-generated schedule controls silent slots.
         Print.info('Booting clients...')
-        workers_addresses = committee.workers_addresses(faults)
+        workers_addresses = committee.workers_addresses(0)
         rate_share = ceil(rate / committee.workers())
+        names = list(committee.json['authorities'])
+        silence_slot_ms = client_silence_slot_ms(
+            node_parameters.json['max_header_delay']
+        )
+        silence_schedules = build_client_schedules(
+            names, faults, bench_parameters.duration, silence_slot_ms
+        )
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host = Committee.ip(address)
@@ -230,26 +235,29 @@ class Bench:
                     address,
                     bench_parameters.tx_size,
                     rate_share,
-                    [x for y in workers_addresses for _, x in y]
+                    [x for y in workers_addresses for _, x in y],
+                    silence_schedules[names[i]],
+                    silence_slot_ms,
                 )
                 log_file = PathMaker.client_log_file(i, id)
                 self._background_run(host, cmd, log_file)
 
-        # Run the primaries (except the faulty ones).
+        # Run every primary; adversaries are selected independently each round.
         Print.info('Booting primaries...')
-        for i, address in enumerate(committee.primary_addresses(faults)):
+        for i, address in enumerate(committee.primary_addresses(0)):
             host = Committee.ip(address)
             cmd = CommandMaker.run_primary(
                 PathMaker.key_file(i),
                 PathMaker.committee_file(),
                 PathMaker.db_path(i),
                 PathMaker.parameters_file(),
-                debug=debug
+                debug=debug,
+                faults=faults,
             )
             log_file = PathMaker.primary_log_file(i)
             self._background_run(host, cmd, log_file)
 
-        # Run the workers (except the faulty ones).
+        # Run every worker; batch production follows the primary's round state.
         Print.info('Booting workers...')
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
@@ -277,7 +285,7 @@ class Bench:
         subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
 
         # Download log files.
-        workers_addresses = committee.workers_addresses(faults)
+        workers_addresses = committee.workers_addresses(0)
         progress = progress_bar(workers_addresses, prefix='Downloading workers logs:')
         for i, addresses in enumerate(progress):
             for id, address in addresses:
@@ -292,7 +300,7 @@ class Bench:
                     local=PathMaker.worker_log_file(i, id)
                 )
 
-        primary_addresses = committee.primary_addresses(faults)
+        primary_addresses = committee.primary_addresses(0)
         progress = progress_bar(primary_addresses, prefix='Downloading primaries logs:')
         for i, address in enumerate(progress):
             host = Committee.ip(address)
@@ -350,7 +358,7 @@ class Bench:
                     Print.heading(f'Run {i+1}/{bench_parameters.runs}')
                     try:
                         self._run_single(
-                            r, committee_copy, bench_parameters, debug
+                            r, committee_copy, bench_parameters, node_parameters, debug
                         )
 
                         faults = bench_parameters.faults

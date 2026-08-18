@@ -1,12 +1,16 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use crate::adversary;
 use crate::messages::{Certificate, Header};
-use crate::primary::Round;
+use crate::primary::{PrimaryWorkerMessage, Round};
+use bytes::Bytes;
 use config::{Committee, WorkerId};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
+use network::{CancelHandler, ReliableSender};
+use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -18,6 +22,14 @@ pub mod proposer_tests;
 pub struct Proposer {
     /// The public key of this primary.
     name: PublicKey,
+    authorities: Vec<PublicKey>,
+    adversary_faults: usize,
+    adversary_seed: u64,
+    silent: bool,
+    pause_batches_during_silence: bool,
+    worker_addresses: Vec<SocketAddr>,
+    worker_network: ReliableSender,
+    worker_handlers: Vec<CancelHandler>,
     /// Service to sign headers.
     signature_service: SignatureService,
     /// The size of the headers' payload.
@@ -54,6 +66,31 @@ impl Proposer {
         rx_workers: Receiver<(Digest, WorkerId)>,
         tx_core: Sender<Header>,
     ) {
+        let authorities = committee.authorities.keys().cloned().collect();
+        let adversary_faults = std::env::var("TUSK_FAULTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let adversary_seed = std::env::var("TUSK_ADVERSARY_SEED")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let pause_batches_during_silence =
+            match std::env::var("TUSK_CLIENT_DURING_SILENCE").as_deref() {
+                Ok("send") => false,
+                Ok("pause") | Err(std::env::VarError::NotPresent) => true,
+                Ok(value) => panic!(
+                    "TUSK_CLIENT_DURING_SILENCE must be send or pause, got {}",
+                    value
+                ),
+                Err(error) => panic!("Invalid TUSK_CLIENT_DURING_SILENCE: {}", error),
+            };
+        let worker_addresses = committee
+            .our_workers(&name)
+            .expect("Our public key or worker id is not in the committee")
+            .iter()
+            .map(|worker| worker.primary_to_worker)
+            .collect();
         let genesis = Certificate::genesis(committee)
             .iter()
             .map(|x| x.digest())
@@ -62,6 +99,14 @@ impl Proposer {
         tokio::spawn(async move {
             Self {
                 name,
+                authorities,
+                adversary_faults,
+                adversary_seed,
+                silent: false,
+                pause_batches_during_silence,
+                worker_addresses,
+                worker_network: ReliableSender::new(),
+                worker_handlers: Vec::new(),
                 signature_service,
                 header_size,
                 max_header_delay,
@@ -76,6 +121,27 @@ impl Proposer {
             .run()
             .await;
         });
+    }
+
+    async fn enter_round(&mut self, round: Round) {
+        self.round = round;
+        self.silent = adversary::selected(
+            &self.name,
+            &self.authorities,
+            round,
+            self.adversary_faults,
+            self.adversary_seed,
+        );
+        if self.adversary_faults == 0 {
+            return;
+        }
+        let pause_batches = self.silent && self.pause_batches_during_silence;
+        let message = PrimaryWorkerMessage::BatchSilent(round, pause_batches);
+        let bytes = bincode::serialize(&message).expect("Failed to serialize batch state");
+        self.worker_handlers = self
+            .worker_network
+            .broadcast(self.worker_addresses.clone(), Bytes::from(bytes))
+            .await;
     }
 
     async fn make_header(&mut self) {
@@ -113,6 +179,7 @@ impl Proposer {
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         debug!("Dag starting at round {}", self.round);
+        self.enter_round(self.round).await;
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
@@ -127,9 +194,12 @@ impl Proposer {
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
             if (timer_expired || enough_digests) && enough_parents {
-                // Make a new header.
-                self.make_header().await;
-                self.payload_size = 0;
+                if self.silent {
+                    self.last_parents.clear();
+                } else {
+                    self.make_header().await;
+                    self.payload_size = 0;
+                }
 
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
@@ -143,7 +213,7 @@ impl Proposer {
                     }
 
                     // Advance to the next round.
-                    self.round = round + 1;
+                    self.enter_round(round + 1).await;
                     debug!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.
