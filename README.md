@@ -197,6 +197,7 @@ Results depend on hardware and load. `Consensus latency` measures header creatio
 - Read [All You Need is DAG](https://arxiv.org/abs/2102.08325) for related asynchronous DAG consensus.
 - See [benchmark/README.md](benchmark/README.md) for complete benchmark parameters and result semantics.
 - See [README-AWS.md](README-AWS.md) for complete AWS 10/20/50-node, cross-Region, and adversary deployment instructions.
+- See [README-WINDOWS五区域PEM部署.md](README-WINDOWS五区域PEM部署.md) when a Windows computer controls five AWS Regions using one PEM per Region.
 - Inspect the [primary](primary), [worker](worker), and [consensus](consensus) crates.
 
 ## License

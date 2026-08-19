@@ -8,8 +8,8 @@
 |---|---|
 | AMI | Ubuntu Server 24.04 LTS，x86_64 |
 | 节点数 | 10、20 或 50 |
-| 登录用户 | `root` |
-| 项目目录 | `/root/Tusk-Ubuntu24` |
+| 登录用户 | `ubuntu` |
+| 项目目录 | `/home/ubuntu/Tusk-Ubuntu24` |
 | 仓库 | `https://github.com/DrDaydream/Tusk-Ubuntu24.git` |
 | 推荐实例 | 至少 4 vCPU / 16 GiB，50 节点建议 8 vCPU |
 | 磁盘 | 至少 30 GiB gp3 |
@@ -17,8 +17,6 @@
 | 网络 | 同一 Region、同一 VPC，建议同一 AZ |
 
 协议要求 `n >= 3f+1`。推荐最大敌手数：10 节点 f=3、20 节点 f=6、50 节点 f=16。先以 10 节点、20 秒、10,000 总 TPS 验证。创建 50 台前检查 AWS Service Quotas 中的 On-Demand vCPU 配额。
-
-本文假设服务器已经允许 `root` 使用密钥直接 SSH。AWS 官方 Ubuntu AMI 通常默认禁用 root 直登；继续部署前必须先确认 `ssh -i KEY root@PUBLIC_IP` 成功，否则应在镜像层启用 root 登录或改用服务器实际允许的账户。
 
 ## 2. AWS 控制台与安全组
 
@@ -63,8 +61,8 @@ hosts 与 committee 统一写可路由的 Private IPv4，node-0 必须能私网 
 ~~~bash
 chmod 400 ~/Downloads/tusk-aws.pem
 scp -i ~/Downloads/tusk-aws.pem ~/Downloads/tusk-aws.pem \
-  root@NODE0_PUBLIC_IP:/root/.ssh/tusk-aws.pem
-ssh -i ~/Downloads/tusk-aws.pem root@NODE0_PUBLIC_IP
+  ubuntu@NODE0_PUBLIC_IP:/home/ubuntu/.ssh/tusk-aws.pem
+ssh -i ~/Downloads/tusk-aws.pem ubuntu@NODE0_PUBLIC_IP
 ~~~
 
 进入 node-0 后：
@@ -78,8 +76,8 @@ nano ~/.ssh/config
 
 ~~~sshconfig
 Host 10.*
-    User root
-    IdentityFile /root/.ssh/tusk-aws.pem
+    User ubuntu
+    IdentityFile /home/ubuntu/.ssh/tusk-aws.pem
     StrictHostKeyChecking accept-new
     ConnectTimeout 8
     ServerAliveInterval 5
@@ -289,16 +287,15 @@ TUSK_CLIENT_DURING_SILENCE=send \
 
 默认路径：
 
-- `SSH_KEY=~/.ssh/tusk-aws.pem`
-- `REMOTE_USER=root`
-- `REMOTE_DIR=/root/Tusk-Ubuntu24`
+- `SSH_KEY` 留空时按 `~/.ssh/config` 为不同 Region 选择密钥
+- `REMOTE_USER=ubuntu`
+- `REMOTE_DIR=/home/ubuntu/Tusk-Ubuntu24`
 - `HOSTS_FILE=deploy/hosts-N.txt`
 
 覆盖示例：
 
 ~~~bash
-SSH_KEY=/root/.ssh/tusk-aws.pem \
-HOSTS_FILE=/root/Tusk-Ubuntu24/deploy/hosts-10.txt \
+HOSTS_FILE=/home/ubuntu/Tusk-Ubuntu24/deploy/hosts-10.txt \
 ./run-multi-servers.sh 10 20 10000
 ~~~
 

@@ -9,11 +9,15 @@ case "$NODES" in 10|20|50) ;; *) echo "Usage: $0 <10|20|50> [seconds] [total-tps
 [[ "$FAULTS" =~ ^[0-9]+$ ]] && (( FAULTS < NODES )) || { echo "TUSK_FAULTS must be smaller than the node count" >&2; exit 2; }
 [[ "$ADVERSARY_SEED" =~ ^[0-9]+$ ]] || { echo "TUSK_ADVERSARY_SEED must be a non-negative integer" >&2; exit 2; }
 case "$CLIENT_DURING_SILENCE" in send|pause) ;; *) echo "TUSK_CLIENT_DURING_SILENCE must be send or pause" >&2; exit 2;; esac
-REMOTE_USER="${REMOTE_USER:-root}"; REMOTE_DIR="${REMOTE_DIR:-/root/Tusk-Ubuntu24}"
-HOSTS_FILE="${HOSTS_FILE:-deploy/hosts-${NODES}.txt}"; SSH_KEY="${SSH_KEY:-$HOME/.ssh/tusk-aws.pem}"
+REMOTE_USER="${REMOTE_USER:-ubuntu}"; REMOTE_DIR="${REMOTE_DIR:-/home/ubuntu/Tusk-Ubuntu24}"
+HOSTS_FILE="${HOSTS_FILE:-deploy/hosts-${NODES}.txt}"; SSH_KEY="${SSH_KEY:-}"
 TX_SIZE="${TX_SIZE:-512}"; READY_TIMEOUT="${READY_TIMEOUT:-240}"
-SSH_OPTS=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new)
-[[ -f "$HOSTS_FILE" && -f "$SSH_KEY" ]] || { echo "Missing hosts file or SSH key" >&2; exit 1; }
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new)
+[[ -f "$HOSTS_FILE" ]] || { echo "Missing hosts file" >&2; exit 1; }
+if [[ -n "$SSH_KEY" ]]; then
+  [[ -f "$SSH_KEY" ]] || { echo "Missing SSH key $SSH_KEY" >&2; exit 1; }
+  SSH_OPTS=(-i "$SSH_KEY" "${SSH_OPTS[@]}")
+fi
 mapfile -t IPS < <(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$HOSTS_FILE" | awk 'NF')
 [[ "${#IPS[@]}" -eq "$NODES" && "$(printf '%s\n' "${IPS[@]}" | sort -u | wc -l)" -eq "$NODES" ]] || { echo "Invalid hosts file" >&2; exit 1; }
 RATE_SHARE=$(((TOTAL_RATE+NODES-1)/NODES)); TX_NODES=""
