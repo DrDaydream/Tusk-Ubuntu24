@@ -35,3 +35,19 @@ sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$HOSTS" | xargs -P 10 -I {} ssh {} '
 sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$HOSTS" | xargs -P 50 -I {} ssh {} '
   printf "%s: " "$(hostname)"; test -x ~/Tusk-Ubuntu24/target/release/node && echo "build ok" || echo "build failed"'
 ~~~
+
+## 已通过 Orca-A 安装依赖
+
+如果所有节点已成功编译 Orca-A，就不需要重复安装 APT 软件包或 Rust。直接复用系统依赖和 `~/.cargo` 缓存，编译 Tusk：
+
+~~~bash
+sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$HOSTS" | xargs -P 10 -I {} ssh {} '
+  set -e; cd ~/Tusk-Ubuntu24
+  . "$HOME/.cargo/env"
+  LIBCLANG_PATH=/usr/lib/llvm-14/lib CLANG_PATH=/usr/bin/clang-14 \
+  CC=/usr/bin/clang-14 CXX=/usr/bin/clang++-14 CXXFLAGS="-include cstdint" \
+  CARGO_BUILD_JOBS=2 cargo build --quiet --release --features benchmark
+'
+~~~
+
+Tusk 仍需生成自己的 `~/Tusk-Ubuntu24/target/release`。
