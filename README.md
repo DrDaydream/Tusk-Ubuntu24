@@ -191,15 +191,7 @@ For comparison, this is the previously recorded 4-node, 1-fault, 20-second local
 
 Results depend on hardware and load. `Consensus latency` measures header creation to consensus commit; `End-to-end latency` starts when the benchmark client submits a sampled transaction. Short executions may not converge to the configured long-run direct/fallback ratio.
 
-## Next Steps
 
-- Read [Narwhal and Tusk: A DAG-based Mempool and Efficient BFT Consensus](https://arxiv.org/pdf/2105.11827.pdf).
-- Read [All You Need is DAG](https://arxiv.org/abs/2102.08325) for related asynchronous DAG consensus.
-- See [benchmark/README.md](benchmark/README.md) for complete benchmark parameters and result semantics.
-- See [README-AWS.md](README-AWS.md) for complete AWS 10/20/50-node, cross-Region, and adversary deployment instructions.
-- See [README-WINDOWS五区域PEM部署.md](README-WINDOWS五区域PEM部署.md) when a Windows computer controls five AWS Regions using one PEM per Region.
-- See [README-50节点并行下载.md](README-50节点并行下载.md) for parallel code download, dependency installation, and compilation on 50 nodes.
-- Inspect the [primary](primary), [worker](worker), and [consensus](consensus) crates.
 
 ## License
 
